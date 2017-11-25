@@ -8,6 +8,9 @@
 #include "Components/InputComponent.h"
 #include "GameFramework/InputSettings.h"
 #include "Kismet/GameplayStatics.h"
+#include "UnrealNetwork.h"
+#include "BulletSponge.h"
+#include "MyPlayerController.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogFPChar, Warning, All);
 
@@ -31,7 +34,7 @@ ABulletSpongeCharacter::ABulletSpongeCharacter()
 
 	// Create a mesh component that will be used when being viewed from a '1st person' view (when controlling this pawn)
 	Mesh1P = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("CharacterMesh1P"));
-	Mesh1P->SetOnlyOwnerSee(true);
+	Mesh1P->SetOnlyOwnerSee(false);
 	Mesh1P->SetupAttachment(FirstPersonCameraComponent);
 	Mesh1P->bCastDynamicShadow = false;
 	Mesh1P->CastShadow = false;
@@ -40,7 +43,7 @@ ABulletSpongeCharacter::ABulletSpongeCharacter()
 
 	// Create a gun mesh component
 	FP_Gun = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FP_Gun"));
-	FP_Gun->SetOnlyOwnerSee(true);			// only the owning player will see this mesh
+	FP_Gun->SetOnlyOwnerSee(false);			// only the owning player will see this mesh
 	FP_Gun->bCastDynamicShadow = false;
 	FP_Gun->CastShadow = false;
 	// FP_Gun->SetupAttachment(Mesh1P, TEXT("GripPoint"));
@@ -52,6 +55,8 @@ ABulletSpongeCharacter::ABulletSpongeCharacter()
 
 	// Default offset from the character location for projectiles to spawn
 	GunOffset = FVector(100.0f, 0.0f, 10.0f);
+
+	Health = 100.f;
 
 	// Note: The ProjectileClass and the skeletal mesh/anim blueprints for Mesh1P, FP_Gun, and VR_Gun 
 	// are set in the derived blueprint asset named MyCharacter to avoid direct content references in C++.
@@ -70,6 +75,15 @@ void ABulletSpongeCharacter::BeginPlay()
 	
 }
 
+void ABulletSpongeCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty> & OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ABulletSpongeCharacter, Task);
+	DOREPLIFETIME(ABulletSpongeCharacter, Health);
+
+}
+
 //////////////////////////////////////////////////////////////////////////
 // Input
 
@@ -77,6 +91,9 @@ void ABulletSpongeCharacter::SetupPlayerInputComponent(class UInputComponent* Pl
 {
 	// set up gameplay key bindings
 	check(PlayerInputComponent);
+
+	InputComponent->BindAction("fire", IE_Pressed, this, &ABulletSpongeCharacter::StartFiring);
+	InputComponent->BindAction("fire", IE_Released, this, &ABulletSpongeCharacter::StopFiring);
 
 	PlayerInputComponent->BindAction("Jump", IE_Pressed, this, &ACharacter::Jump);
 	PlayerInputComponent->BindAction("Jump", IE_Released, this, &ACharacter::StopJumping);
@@ -93,10 +110,46 @@ void ABulletSpongeCharacter::SetupPlayerInputComponent(class UInputComponent* Pl
 	PlayerInputComponent->BindAxis("TurnRate", this, &ABulletSpongeCharacter::TurnAtRate);
 	PlayerInputComponent->BindAxis("LookUp", this, &APawn::AddControllerPitchInput);
 	PlayerInputComponent->BindAxis("LookUpRate", this, &ABulletSpongeCharacter::LookUpAtRate);
+
+}
+
+void ABulletSpongeCharacter::StartFiring()
+{
+	PerformTask(ETaskEnum::Fire);
+}
+
+void ABulletSpongeCharacter::StopFiring()
+{
+	PerformTask(ETaskEnum::None);
+}
+
+void ABulletSpongeCharacter::PerformTask(ETaskEnum::Type NewTask)
+{
+	if (GetNetMode() == NM_Client)
+	{
+		ServerPerformTask(NewTask);
+		return;
+	}
+
+	Task = NewTask;
+	OnRep_Task();
+}
+
+void ABulletSpongeCharacter::ServerPerformTask_Implementation(ETaskEnum::Type NewTask)
+{
+	PerformTask(NewTask);
+}
+
+bool ABulletSpongeCharacter::ServerPerformTask_Validate(ETaskEnum::Type NewTask)
+{
+	return true;
 }
 
 void ABulletSpongeCharacter::OnFire()
 {
+	// Check if firing projectile
+	if (Task != ETaskEnum::Fire) return;
+
 	// try and fire a projectile
 	if (ProjectileClass != NULL)
 	{
@@ -104,7 +157,7 @@ void ABulletSpongeCharacter::OnFire()
 		if (World != NULL)
 		{
 			
-				const FRotator SpawnRotation = GetControlRotation();
+				const FRotator SpawnRotation = GetViewRotation();
 				// MuzzleOffset is in camera space, so transform it to world space before offsetting from the character location to find the final muzzle position
 				const FVector SpawnLocation = ((FP_MuzzleLocation != nullptr) ? FP_MuzzleLocation->GetComponentLocation() : GetActorLocation()) + SpawnRotation.RotateVector(GunOffset);
 
@@ -134,6 +187,8 @@ void ABulletSpongeCharacter::OnFire()
 			AnimInstance->Montage_Play(FireAnimation, 1.f);
 		}
 	}
+	// Set automatic fire
+	GetWorldTimerManager().SetTimer(TimerHandle_Task, this, &ABulletSpongeCharacter::OnFire, 0.09f);
 }
 
 
@@ -165,5 +220,61 @@ void ABulletSpongeCharacter::LookUpAtRate(float Rate)
 {
 	// calculate delta for this frame from the rate information
 	AddControllerPitchInput(Rate * BaseLookUpRate * GetWorld()->GetDeltaSeconds());
+}
+
+void ABulletSpongeCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	// Setting pawn control rotation manually
+	FirstPersonCameraComponent->SetWorldRotation(GetViewRotation());
+}
+
+	// get view rotation inheruted from pawn
+FRotator ABulletSpongeCharacter::GetViewRotation() const
+{
+	// if controller exits, , 
+	if (Controller)
+	{
+		//get controller rotation
+		return Controller->GetControlRotation();
+	}
+
+	//return RemoteViewPitch which is unsigned iteger 8
+	return FRotator(RemoteViewPitch / 255.f * 360.f, GetActorRotation().Yaw, 0.f);
+}
+
+float ABulletSpongeCharacter::TakeDamage(float DamageAmount, const FDamageEvent & DamageEvent, AController * EventInstigator, AActor * DamageCauser)
+{
+	Health -= DamageAmount;
+	if (Health < 0.f)
+	{
+		AMyPlayerController * PC = Cast<AMyPlayerController>(Controller);
+		if (PC)
+		{
+			PC->OnKilled();
+		}
+
+		Destroy();
+	}
+
+	OnRep_Health();
+	return DamageAmount;
+}
+
+void ABulletSpongeCharacter::OnRep_Task()
+{
+	switch (Task)
+	{
+	case (ETaskEnum::None):
+		break;
+	case (ETaskEnum::Fire):
+		OnFire();
+		break;
+	}
+}
+void ABulletSpongeCharacter::OnRep_Health()
+{
+	FirstPersonCameraComponent->PostProcessSettings.SceneFringeIntensity = 5.f - Health * 0.05f;
 }
 

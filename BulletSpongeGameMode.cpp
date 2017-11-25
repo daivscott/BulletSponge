@@ -4,6 +4,7 @@
 #include "BulletSpongeHUD.h"
 #include "BulletSpongeCharacter.h"
 #include "UObject/ConstructorHelpers.h"
+#include "MyPlayerController.h"
 
 ABulletSpongeGameMode::ABulletSpongeGameMode()
 	: Super()
@@ -14,4 +15,6 @@ ABulletSpongeGameMode::ABulletSpongeGameMode()
 
 	// use our custom HUD class
 	HUDClass = ABulletSpongeHUD::StaticClass();
+
+	PlayerControllerClass = AMyPlayerController::StaticClass();
 }

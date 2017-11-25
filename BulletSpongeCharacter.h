@@ -5,8 +5,21 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "BulletSpongeCharacter.generated.h"
+//#include "Engine.h"
 
 class UInputComponent;
+
+UENUM()
+namespace ETaskEnum
+{
+	enum Type
+	{
+		None,
+		Fire,
+		Reload,
+	};
+}
+
 
 UCLASS(config=Game)
 class ABulletSpongeCharacter : public ACharacter
@@ -28,6 +41,14 @@ class ABulletSpongeCharacter : public ACharacter
 	/** First person camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	class UCameraComponent* FirstPersonCameraComponent;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Task)
+		TEnumAsByte<ETaskEnum::Type> Task;
+
+	FTimerHandle TimerHandle_Task;
+
+	UPROPERTY(ReplicatedUsing = OnRep_Health)
+		float Health;
 
 public:
 	ABulletSpongeCharacter();
@@ -62,6 +83,15 @@ public:
 
 
 protected:
+
+	void PerformTask(ETaskEnum::Type NewTask);
+
+	UFUNCTION(Server, Reliable, WithValidation)
+		void ServerPerformTask(ETaskEnum::Type NewTask);
+
+	void StartFiring();
+
+	void StopFiring();
 	
 	/** Fires a projectile. */
 	void OnFire();
@@ -90,6 +120,22 @@ protected:
 	// End of APawn interface
 
 public:
+
+	// Override the tick function
+	void Tick(float DeltaTime) override;
+
+
+	// Function to get view rotation on multiplayer 
+	FRotator GetViewRotation() const override;
+
+	float TakeDamage(float DamageAmount, const FDamageEvent & DamageEvent, AController * EventInstigator, AActor * DamageCauser) override;
+
+	UFUNCTION()
+		void OnRep_Task();
+
+	UFUNCTION()
+		void OnRep_Health();
+
 	/** Returns Mesh1P subobject **/
 	FORCEINLINE class USkeletalMeshComponent* GetMesh1P() const { return Mesh1P; }
 	/** Returns FirstPersonCameraComponent subobject **/
