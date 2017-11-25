@@ -13,7 +13,10 @@ class ABulletSpongeGameMode : public AGameModeBase
 
 public:
 	ABulletSpongeGameMode();
+
+	void PostLogin(APlayerController * NewPlayer) override;
+
+	AActor * ChoosePlayerStart_Implementation(AController * Player) override;
+
+	bool ShouldSpawnAtStartSpot(AController * Player) override { return false; };
 };
-
-
-
